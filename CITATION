@@ -1,0 +1,9 @@
+@article{Keshishian2020,
+author = {Keshishian, Menoua and Akbari, Hassan and Khalighinejad, Bahar and Herrero, Jose L. and Mehta, Ashesh D. and Mesgarani, Nima},
+doi = {10.7554/ELIFE.53445},
+journal = {eLife},
+publisher = {eLife Sciences Publications Ltd},
+title = {Estimating and interpreting nonlinear receptive field of sensory neural responses with deep neural network models},
+volume = {9},
+year = {2020}
+}
