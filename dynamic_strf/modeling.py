@@ -54,6 +54,38 @@ class Dataset(torch.utils.data.Dataset):
         )
 
 
+class SpectrogramParser(torch.nn.Sequential):
+    def __init__(self, in_sr, out_sr, freqbins=64, f_min=20, f_max=8000, top_db=70, normalize=False):
+        """
+        A waveform to Mel-spectrogram parser.
+
+        Arguments:
+            in_sr: sampling rate of input waveform.
+            out_sr: sampling rate of output spectrogram.
+            freqbins: number of frequency bins of output spectrogram.
+            f_min: minimum frequency of the spectrogram.
+            f_max: maximum frequency of the spectrogram.
+            top_db: the maximum decibel range between the highest and lowest spectrotemporal bins.
+            normalize: whether to normalize the spectrogram power.
+        """
+        super().__init__(
+            torchaudio.transforms.MelSpectrogram(
+                in_sr, n_fft=1024, hop_length=int(in_sr/out_sr),
+                f_min=f_min, f_max=f_max, n_mels=freqbins, power=2.0
+            ),
+
+            torchaudio.transforms.AmplitudeToDB(
+                'power', top_db=top_db
+            ),
+
+            type("Normalize", (torch.nn.Module,), dict(
+                forward=lambda self, x: (x - x.max()).squeeze(0).T.float() / top_db + 1
+            ))() if normalize else type("Squeeze", (torch.nn.Module,), dict(
+                forward=lambda self, x: x.squeeze(0).T.float()
+            ))()
+        )
+
+
 class BaseEncoder(pl.LightningModule):
     def __init__(self, input_size, channels=1, optimizer_cfg={}, scheduler_cfg={}):
         """
@@ -152,38 +184,6 @@ class SharedEncoder(BaseEncoder):
                 raise RuntimeError(f'Unsupported module {type(m)}')
         
         return receptive_field
-
-
-class SpectrogramParser(torch.nn.Sequential):
-    def __init__(self, in_sr, out_sr, freqbins=64, f_min=20, f_max=8000, top_db=70, normalize=False):
-        """
-        A waveform to Mel-spectrogram parser.
-
-        Arguments:
-            in_sr: sampling rate of input waveform.
-            out_sr: sampling rate of output spectrogram.
-            freqbins: number of frequency bins of output spectrogram.
-            f_min: minimum frequency of the spectrogram.
-            f_max: maximum frequency of the spectrogram.
-            top_db: the maximum decibel range between the highest and lowest spectrotemporal bins.
-            normalize: whether to normalize the spectrogram power.
-        """
-        super().__init__(
-            torchaudio.transforms.MelSpectrogram(
-                in_sr, n_fft=1024, hop_length=int(in_sr/out_sr),
-                f_min=f_min, f_max=f_max, n_mels=freqbins, power=2.0
-            ),
-
-            torchaudio.transforms.AmplitudeToDB(
-                'power', top_db=top_db
-            ),
-
-            type("Normalize", (torch.nn.Module,), dict(
-                forward=lambda self, x: (x - x.max()).squeeze(0).T.float() / top_db + 1
-            ))() if normalize else type("Squeeze", (torch.nn.Module,), dict(
-                forward=lambda self, x: x.squeeze(0).T.float()
-            ))()
-        )
 
 
 def fit(model, data, trainer=None, leave_out_idx=[], batch_size=64, num_workers=4, gpus=1, precision=16, verbose=0):
