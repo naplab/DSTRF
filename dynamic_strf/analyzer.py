@@ -11,7 +11,9 @@ import scipy.stats
 import torch
 import pytorch_lightning as pl
 
+import dynamic_strf.utils as utils
 import dynamic_strf.estimate as estimate
+import dynamic_strf.modeling as modeling
 from dynamic_strf.modeling import Dataset
 
 
@@ -89,149 +91,37 @@ class Analyzer:
         
         self._nonlinearity = None
     
-    def fit_on_subset(self, leave_out_idx):
-        """
-        Fit model on training data, after leaving out trials indicated by `leave_out_idx`.
-
-        Arguments:
-            leave_out_idx: list of indices of trials to leave out from training.
-        """
-        if self.builder is None:
-            # If builder not provided, nothing to train
-            return
-        
-        fname = f"model-{'_'.join([str(i) for i in leave_out_idx])}.pt"
-        fpath = os.path.join(self.store_loc, fname)
-        if os.path.exists(fpath):
-            # If trained model exists, skip retraining
-            return
-        
-        # Initialize model
-        model = self.builder().to(self.device)
-
-        # Initialize training dataloader
-        train_dataloader = Dataset(
-            [x for i, x in enumerate(self.data[0]) if i not in leave_out_idx],
-            [y for i, y in enumerate(self.data[1]) if i not in leave_out_idx],
-        ).iterator(batch_size=self.batch_size, num_workers=self.num_workers)
-        
-        # Initialize validation dataloader
-        if self.validation:
-            val_dataloader = Dataset(
-                [x for i, x in enumerate(self.validation[0])],
-                [y for i, y in enumerate(self.validation[1])]
-            ).iterator(batch_size=self.batch_size, num_workers=self.num_workers)
-        else:
-            val_dataloader = Dataset(
-                [x for i, x in enumerate(self.data[0]) if i in leave_out_idx],
-                [y for i, y in enumerate(self.data[1]) if i in leave_out_idx]
-            ).iterator(batch_size=self.batch_size, num_workers=self.num_workers)
-        
-        # Initialize trainer
-        if self.trainer:
-            trainer = self.trainer()
-        else:
-            trainer = pl.Trainer(
-                gpus=self.use_gpus,
-                precision=self.precision,
-                gradient_clip_val=10.0,
-                max_epochs=1000,
-                logger=False,
-                detect_anomaly=True,
-                enable_model_summary=(self.verbose >= 2),
-                enable_progress_bar=(self.verbose >= 2),
-                enable_checkpointing=False,
-                callbacks=[]
-            )
-        
-        # Fit model on train split
-        trainer.fit(
-            model,
-            train_dataloader,
-        )
-        
-        # Test model on left-out split
-        r = trainer.test(
-            model,
-            val_dataloader,
-        )[0]['test_corr']
-        print(f'r={r:0.4f} -- ', flush=True, end='')
-        
-        torch.save(model.state_dict(), fpath)
-    
-    def load_instance(self, leave_out_idx):
-        """
-        Load a model trained after leaving out trials indicated in `leave_out_idx`.
-
-        Arguments:
-            leave_out_idx: list of indices of trials that were left out from training.
-        """
-        if self.builder is None:
-            model = self.model
-        else:
-            model = self.builder()
-            fname = f"model-{'_'.join([str(i) for i in leave_out_idx])}.pt"
-            fpath = os.path.join(self.store_loc, fname)
-            model.load_state_dict(torch.load(fpath))
-        
-        return model.to(self.device).eval()
-    
-    def instance_dstrf(self, leave_out_idx, x, chunk_size=100):
-        """
-        Estimate dSTRFs on input `x`, from models that were trained by leaving out `leave_out_idx` trials.
-
-        Arguments:
-            leave_out_idx: list of indices of trials that were left out from training.
-            x: input of shape [time * frequency] to calculate dSTRFs for.
-            chunk_size: number of time samples to calculate dSTRF simultaneously on.
-        """
-        # Load trained model and move to `device`
-        model = self.load_instance(leave_out_idx)
-        
-        # Compute dSTRF for input `x`
-        return estimate.dstrf(model, x.to(self.device), chunk_size=chunk_size, verbose=self.verbose >= 2)
-    
-    def estimate_dstrfs(self):
+    def estimate_dstrfs(self, chunk_size=100):
         """
         Estimate dSTRFs for all validation data based on all trained models that had not seen that data
         during training.
         """
-        if self.validation and not self.jackknife:
-            instances = [[None]]
-        elif self.validation is None and self.jackknife:
-            instances = [[i, j] for i in range(len(self.data[0])) for j in range(i+1, len(self.data[0]))]
-        else:
-            instances = [[i] for i in range(len(self.data[0]))]
+        checkpoints = modeling.fit_multiple(
+            builder=self.builder,
+            data=self.data,
+            crossval=self.validation is None,
+            jackknife=self.jackknife,
+            save_dir=self.store_loc,
+            trainer=self.trainer,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            gpus=self.use_gpus,
+            precision=self.precision,
+            verbose=self.verbose
+        )
+
+        # modeling.evaluate(model, self.validation if self.validation else self.data)
         
-        for leave_out_idx in instances:
-            if self.verbose >= 1:
-                print(f"Fitting model for leave out: [{', '.join([str(i) for i in leave_out_idx])}]... ", flush=True, end='')
-            self.fit_on_subset(leave_out_idx)
-            print('DONE', flush=True)
-        
-        dstrfs = []
-        for i, x in enumerate(self.validation[0] if self.validation else self.data[0]):
-            if self.verbose >= 1:
-                print(f"Computing dSTRFs for stimulus {i+1:02d}/{len(self.validation[0] if self.validation else self.data[0]):02d}... ", flush=True, end='')
-            
-            path = os.path.join(self.store_loc, f"dSTRF-{i:03d}.pt")
-            if os.path.exists(path):
-                dstrf = torch.load(path)
-            elif self.validation:
-                dstrf = torch.stack([
-                    self.instance_dstrf(leave_out_idx, x) for leave_out_idx in instances
-                ]).mean(dim=0)
-            else:
-                dstrf = torch.stack([
-                    self.instance_dstrf(leave_out_idx, x) for leave_out_idx in instances if i in leave_out_idx
-                ]).mean(dim=0)
-            
-            dstrfs.append(dstrf)
-            if not os.path.exists(path):
-                torch.save(dstrf, path)
-            print('DONE', flush=True)
-        
-        return dstrfs
+        estimate.dSTRF_multiple(
+            model=self.builder() if self.builder else self.model,
+            checkpoints=checkpoints,
+            data=self.validation[0] if self.validation else self.data[0],
+            crossval=self.validation is None,
+            jackknife=self.jackknife,
+            save_dir=self.store_loc,
+            chunk_size=chunk_size,
+            verbose=self.verbose
+        )
     
     @property
     def nonlinearity(self):

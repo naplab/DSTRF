@@ -81,3 +81,28 @@ def first_nonzero(x, axis=0):
     Finds first nonzero element of `x` along specified axis.
     """
     return ((x != 0).cumsum(dim=axis) == 1).int().argmax(dim=axis)
+
+
+def leave_out_indices(num_trials, crossval=False, jackknife=False):
+    if not crossval and not jackknife:
+        instances = [[]]
+    elif crossval and jackknife:
+        instances = [[i, j] for i in range(num_trials) for j in range(i+1, num_trials)]
+    else:
+        instances = [[i] for i in range(num_trials)]
+    
+    return instances
+
+
+def checkpoint_from_leave_out(leave_out_idx):
+    if leave_out_idx:
+        return f"model-{'_'.join(['%03d' % i for i in leave_out_idx])}.pt"
+    else:
+        return 'model-all.pt'
+
+
+def leave_out_from_checkpoint(checkpoint):
+    if checkpoint == 'model-all.pt':
+        return []
+    else:
+        return [int(i) for i in checkpoint.split('-')[-1].split('.')[0].split('_')]

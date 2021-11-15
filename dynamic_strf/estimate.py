@@ -1,5 +1,7 @@
+import os
 import time
 import math
+import glob
 import ipypb
 
 import scipy.stats
@@ -10,7 +12,7 @@ import dynamic_strf.utils as utils
 
 
 @torch.no_grad()
-def dSTRF(model, x, chunk_size=100, verbose=False):
+def dSTRF(model, x, chunk_size=100, verbose=0):
     """
     Estimate dynamic spectrotemporal receptive field (dSTRF) of a model for given input `x`.
 
@@ -50,6 +52,120 @@ def dSTRF(model, x, chunk_size=100, verbose=False):
     
     return torch.cat(dstrfs, dim=0) # shape [time * channel * lag * frequency]
 
+
+@torch.no_grad()
+def dSTRF_jackknife(model, checkpoints, x, chunk_size=100, verbose=0):
+    """
+    Estimate dynamic spectrotemporal receptive field (dSTRF) of a model for given input `x`.
+
+    Arguments:
+        mode: a pytorch model being analyzed. It should accept input of shape [time * in_channels]
+            and return output of shape [time * out_channels].
+        x: input of shape [time * in_channels].
+        chunk_size: number of time samples to calculate dSTRF on simultaneously.
+        verbose: a boolean, indicating whether to print out progress status.
+    
+    Returns:
+        dstrfs: a dSTRF tensor of shape [time * out_channels * time_lag * in_channels].
+    """
+    # Pad input such that output has same shape and is half-precision
+    context_size = model.receptive_field - 1
+    x = torch.nn.functional.pad(x, (0, 0, context_size, 0)).half()
+    def model_fx(x):
+        with torch.cuda.amp.autocast():
+            return model(x)[context_size:]
+    
+    dstrfs = []
+    chunks = math.ceil((len(x) - context_size) / chunk_size)
+    chunks = ipypb.irange(chunks) if verbose else range(chunks)
+    for chunk_idx in chunks:
+        chunk_start = chunk_idx * chunk_size
+        chunk_length = min(chunk_size + context_size, len(x) - chunk_start)
+        
+        # Calculate dSTRFs for all jackknives
+        jacobians = []
+        for checkpoint in checkpoints:
+            # Load model checkpoint
+            model.eval().load_state_dict(torch.load(checkpoint))
+            
+            # Jacobian has shape [time * channel * lag * frequency]
+            jacobian = torch.autograd.functional.jacobian(
+                model_fx, x[chunk_start:chunk_start+chunk_length]
+            ).cpu()
+            jacobian = torch.stack(
+                [j[:, t:t+context_size+1] for t, j in enumerate(jacobian)], dim=0
+            )
+            
+            jacobians.append(jacobian)
+        
+        # Average dSTRFs from all jackknives
+        dstrfs.append( # dSTRF is of shape [time * channel * lag * frequency]
+            torch.mean(torch.stack(jacobians, dim=0), dim=0)
+        )
+        del jacobian, jacobians
+    
+    return torch.cat(dstrfs, dim=0) # shape [time * channel * lag * frequency]
+
+
+@torch.no_grad()
+def dSTRF_multiple(model, checkpoints, data, crossval=False, jackknife=False, save_dir=None, chunk_size=100, verbose=0):
+    """
+    Estimate dynamic spectrotemporal receptive field (dSTRF) of a model for given input `x`.
+
+    Arguments:
+        mode: a pytorch model being analyzed. It should accept input of shape [time * in_channels]
+            and return output of shape [time * out_channels].
+        x: input of shape [time * in_channels].
+        chunk_size: number of time samples to calculate dSTRF on simultaneously.
+        verbose: a boolean, indicating whether to print out progress status.
+    
+    Returns:
+        dstrfs: a dSTRF tensor of shape [time * out_channels * time_lag * in_channels].
+    """
+    if save_dir is None:
+        raise ValueError('Parameter `save_dir` cannot be empty.')
+    
+    if verbose >= 1 and os.path.exists(save_dir):
+        print(f'Directory "{save_dir}" already exists.', flush=True)
+    os.makedirs(save_dir, exist_ok=True)
+    
+    if os.path.isdir(checkpoints):
+        checkpoints = sorted(glob.glob(os.path.join(checkpoints, 'model-*.pt')))
+        if verbose >= 1:
+            print(f'Found {len(checkpoints)} model checkpoints in specified directory.', flush=True)
+    
+    for i, x in enumerate(data):
+        fpath = os.path.join(save_dir, f'dSTRF-{i:03d}.pt')
+        if os.path.exists(fpath):
+            continue
+        
+        if crossval:
+            checkpoints_i = [ckpt for ckpt in checkpoints if i in utils.leave_out_from_checkpoint(ckpt)]
+        else:
+            checkpoints_i = checkpoints
+        
+        if verbose >= 1:
+            print(f'Computing dSTRFs for stimulus {i+1:02d}/{len(data):02d}', end='')
+            if jackknife:
+                print(f' (jackknife = {len(checkpoints_i)})... ', flush=True, end='')
+            else:
+                print(f'... ', flush=True, end='')
+        
+        torch.save(
+            dSTRF_jackknife(
+                model=model,
+                checkpoints=checkpoints_i,
+                x=x,
+                chunk_size=chunk_size,
+                verbose=verbose
+            ),
+            fpath
+        )
+        
+        if verbose >= 1:
+            print('Done.', flush=True)
+
+
 @torch.no_grad()
 def complexity(dstrfs):
     """
@@ -67,6 +183,7 @@ def complexity(dstrfs):
     complexity = (singular_vals / singular_vals.max(dim=1, keepdims=True)[0]).sum(dim=1)
     return complexity
 
+
 @torch.no_grad()
 def gain_change(dstrfs):
     """
@@ -79,6 +196,7 @@ def gain_change(dstrfs):
         gain_change: shape change parameter, tensor of shape [channel]
     """
     return dstrfs.norm(dim=[-2, -1]).std(dim=0).cpu()
+
 
 @torch.no_grad()
 def temporal_hold(dstrfs, lookahead=None, batch_size=1000):
@@ -126,6 +244,7 @@ def temporal_hold(dstrfs, lookahead=None, batch_size=1000):
             pval[lag-1, c] = scipy.stats.wilcoxon(dist0[:, c], dist1[:, c], alternative='less').pvalue
     
     return utils.first_nonzero(pval >= 0.001, axis=0).cpu()
+
 
 @torch.no_grad()
 def shape_change(dstrfs, niter=100, span=None, batch_size=1000, return_shifts=False):
@@ -199,3 +318,40 @@ def shape_change(dstrfs, niter=100, span=None, batch_size=1000, return_shifts=Fa
         return complexity(dstrfs), dstrfs.cpu(), shifts.cpu()
     else:
         return complexity(dstrfs)
+
+
+@torch.no_grad()
+def nonlinearities(paths, reduction='none', verbose=0):
+    nonliniearity = {
+        'complexity': [],
+        'gain change': [],
+        'temporal hold': [],
+        'shape change': []
+    }
+    
+    if os.path.isdir(paths):
+        paths = sorted(glob.glob(os.path.join(paths, 'dSTRF-*.pt')))
+        if verbose >= 1:
+            print(f'Found {len(paths)} dSTRF files in specified directory.', flush=True)
+    
+    if verbose >= 1:
+        paths = ipypb.track(paths)
+    
+    for path in paths:
+        dstrf = torch.load(path).to(self.device)
+        nonliniearity['complexity'].append(estimate.complexity(dstrf))
+        nonliniearity['gain change'].append(estimate.gain_change(dstrf))
+        nonliniearity['temporal hold'].append(estimate.temporal_hold(dstrf))
+        nonliniearity['shape change'].append(estimate.shape_change(dstrf))
+        del dstrf
+    
+    for k in nonliniearity:
+        nonliniearity[k] = torch.stack(nonliniearity[k], dim=1)
+        if reduction == 'mean':
+            nonliniearity[k] = nonliniearity[k].mean(dim=1)
+        elif reduction == 'median':
+            nonliniearity[k] = nonliniearity[k].median(dim=1)
+        elif reduction != 'none':
+            raise NotImplementedError()
+    
+    return nonlinearity
