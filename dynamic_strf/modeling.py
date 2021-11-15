@@ -138,7 +138,44 @@ class BaseEncoder(pl.LightningModule):
         return loss
 
 
-class SharedEncoder(BaseEncoder):
+class LinearEncoder(BaseEncoder):
+    def __init__(self, input_size, channels=1, **kwargs):
+        """
+        A 1D-convolutional neural activity encoder for multiple electrodes which shares all hidden
+        layers, except the final readout, between all electrodes.
+
+        Arguments:
+            input_size: input channels, i.e., frequency bins of input audio spectrogram.
+            hidden_size: number of kernels in each layer of the network.
+            channels: number of output channels, i.e., electrodes being encoded.
+        """
+        super().__init__(input_size, channels, **kwargs)
+        
+        self.conv = torch.nn.Sequential(
+            torch.nn.Conv1d(input_size, channels, 65, bias=True)
+        )
+    
+    def forward(self, x):
+        x = x.to(self.device)
+        x = torch.nn.functional.pad(x, (0, 0, self.receptive_field-1, 0)).float()
+        x = x.T.unsqueeze(dim=0)
+        x = self.conv(x)
+        x = x.squeeze(dim=0).T
+        return x
+    
+    @property
+    def receptive_field(self):
+        receptive_field = 1
+        for m in self.conv:
+            if isinstance(m, torch.nn.Conv1d):
+                receptive_field += (m.kernel_size[0] - 1) * m.dilation[0]
+            elif not isinstance(m, torch.nn.ReLU):
+                raise RuntimeError(f'Unsupported module {type(m)}')
+        
+        return receptive_field
+
+
+class DeepEncoder(BaseEncoder):
     def __init__(self, input_size, hidden_size=128, channels=1, **kwargs):
         """
         A 1D-convolutional neural activity encoder for multiple electrodes which shares all hidden
@@ -152,7 +189,7 @@ class SharedEncoder(BaseEncoder):
         super().__init__(input_size, channels, **kwargs)
         self.hidden_size = hidden_size
         
-        self.conv_shared = torch.nn.Sequential(
+        self.conv = torch.nn.Sequential(
             torch.nn.Conv1d(input_size, hidden_size, 5, dilation=1, bias=False),
             torch.nn.ReLU(),
             torch.nn.Conv1d(hidden_size, hidden_size, 5, dilation=1, bias=False),
@@ -170,14 +207,14 @@ class SharedEncoder(BaseEncoder):
         x = x.to(self.device)
         x = torch.nn.functional.pad(x, (0, 0, self.receptive_field-1, 0)).float()
         x = x.T.unsqueeze(dim=0)
-        x = self.conv_shared(x)
+        x = self.conv(x)
         x = x.squeeze(dim=0).T
         return x
     
     @property
     def receptive_field(self):
         receptive_field = 1
-        for m in self.conv_shared:
+        for m in self.conv:
             if isinstance(m, torch.nn.Conv1d):
                 receptive_field += (m.kernel_size[0] - 1) * m.dilation[0]
             elif not isinstance(m, torch.nn.ReLU):
