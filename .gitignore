@@ -8,7 +8,7 @@ __pycache__/
 Data/
 lightning_logs/
 checkpoints/
-
+output/
 
 # PyTorch checkpoint files
 *.ckpt

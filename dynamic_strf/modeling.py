@@ -315,3 +315,47 @@ def test_multiple(model, checkpoints, data, crossval=False, jackknife_mode='pred
         )
     
     return torch.stack(scores, dim=0)
+
+
+@torch.no_grad()
+def infer_jackknife(model, checkpoints, data, jackknife_mode='pred'):
+    x = data.to(model.device)
+    
+    preds = []
+    for checkpoint in checkpoints:
+        model.load_state_dict(torch.load(checkpoint))
+        preds.append(model(x))
+    
+    if jackknife_mode == 'pred':
+        preds = torch.mean(torch.stack(preds, dim=0), dim=0)
+    else:
+        raise ValueError('Parameter `jackknife_mode` should be one of "pred" or "score".')
+    
+    return preds.cpu()
+
+
+@torch.no_grad()
+def infer_multiple(model, checkpoints, data, crossval=False, jackknife_mode='pred', verbose=0):
+    if os.path.isdir(checkpoints):
+        checkpoints = sorted(glob.glob(os.path.join(checkpoints, 'model-*.pt')))
+        if verbose >= 1:
+            print(f'Found {len(checkpoints)} model checkpoints in specified directory.', flush=True)
+    
+    preds = []
+    iterator = ipypb.irange(len(data)) if verbose >= 1 else range(len(data))
+    for i in iterator:
+        if crossval:
+            checkpoints_i = [ckpt for ckpt in checkpoints if i in utils.leave_out_from_checkpoint(ckpt)]
+        else:
+            checkpoints_i = checkpoints
+        
+        preds.append(
+            infer_jackknife(
+                model=model,
+                checkpoints=checkpoints_i,
+                data=data[i],
+                jackknife_mode=jackknife_mode,
+            )
+        )
+    
+    return preds
