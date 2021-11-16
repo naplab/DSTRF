@@ -5,6 +5,7 @@ __pycache__/
 ._*.py
 
 # Local files
+Examples/Demo-*.ipynb
 Examples/Data/
 Examples/output/
 

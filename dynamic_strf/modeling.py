@@ -87,30 +87,46 @@ class SpectrogramParser(torch.nn.Sequential):
 
 
 class BaseEncoder(pl.LightningModule):
-    def __init__(self, input_size, channels=1, optimizer_cfg={}, scheduler_cfg={}):
+    def __init__(self, input_size, channels=1, loss='mse', optimizer={}, scheduler={}):
         """
         An abstract neural activity encoder for multiple electrodes.
 
         Arguments:
             input_size: input channels, i.e., frequency bins of input audio spectrogram.
             channels: number of output channels, i.e., electrodes being encoded.
-            optimizer_cfg: a dictionary containing configuration for an RAdam optimizer.
-            scheduler_cfg: a dictionary containing configuration for an exponential learning rate
+            optimizer: a dictionary containing configuration for an RAdam optimizer.
+            scheduler: a dictionary containing configuration for an exponential learning rate
                 decay scheduler.
         """
         super().__init__()
         self.input_size = input_size
         self.channels = channels
         
-        self.optimizer_cfg = {
-            'lr': 0.003, 'weight_decay': 0.03, **optimizer_cfg
-        } if isinstance(optimizer_cfg, dict) else optimizer_cfg
+        if isinstance(optimizer, dict):
+            self._optimizer = {'lr': 0.003, 'weight_decay': 0.03, **optimizer}
+        elif callable(optimizer):
+            self._optimizer = optimizer
+        else:
+            raise ValueError(
+                'Parameter `optimizer` either has to be a configuration dictionary'
+                'or a function that returns a PyTorch optimizer object.'
+            )
         
-        self.scheduler_cfg = {
-            'gamma': 0.996, **scheduler_cfg
-        } if isinstance(scheduler_cfg, dict) else scheduler_cfg
+        if isinstance(scheduler, dict):
+            self._scheduler = {'gamma': 0.996, **scheduler}
+        elif callable(scheduler):
+            self._scheduler = scheduler
+        else:
+            raise ValueError(
+                'Parameter `scheduler` either has to be a configuration dictionary'
+                'or a function that returns a PyTorch scheduler object.'
+            )
         
-        self.loss = torch.nn.MSELoss(reduction='mean')
+        if loss = 'mse':
+            self._loss = torch.nn.MSELoss(reduction='mean')
+        else:
+            self._loss = loss
+        
         self._device = 'cpu'
     
     def to(self, device):
@@ -126,13 +142,17 @@ class BaseEncoder(pl.LightningModule):
         return self._device
     
     def configure_optimizers(self):
-        optimizer = radam.RAdam(
-            self.parameters(), **self.optimizer_cfg
-        ) if isinstance(self.optimizer_cfg, dict) else self.optimizer_cfg()
+        params = self.parameters()
         
-        scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            optimizer, **self.scheduler_cfg
-        ) if isinstance(self.scheduler_cfg, dict) else self.scheduler_cfg()
+        if isinstance(self._optimizer, dict):
+            optimizer = radam.RAdam(params, **self._optimizer)
+        else:
+            optimizer = self._optimizer(params)
+        
+        if isinstance(self._scheduler, dict):
+            scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, **self._scheduler)
+        else:
+            scheduler = self._scheduler(optimizer)
         
         return {
             'optimizer': optimizer,
@@ -140,17 +160,16 @@ class BaseEncoder(pl.LightningModule):
         }
     
     def training_step(self, train_batch, batch_idx):
-        loss = torch.mean(torch.stack([
-            self.loss(
+        return torch.mean(torch.stack([
+            self._loss(
                 self(x.to(self.device)),
                 y.to(self.device)
             ) for x, y in zip(*train_batch)
         ]))
-        return loss
 
 
 class LinearEncoder(BaseEncoder):
-    def __init__(self, input_size, channels=1, optimizer_cfg={}, scheduler_cfg={}):
+    def __init__(self, input_size, channels=1, loss='mse', optimizer={}, scheduler={}):
         """
         A 1D-convolutional neural activity encoder for multiple electrodes which shares all hidden
         layers, except the final readout, between all electrodes.
@@ -160,11 +179,11 @@ class LinearEncoder(BaseEncoder):
             hidden_size: number of kernels in each layer of the network.
             channels: number of output channels, i.e., electrodes being encoded.
         """
-        if isinstance(optimizer_cfg, dict):
-            optimizer_cfg = {'lr': 0.03, 'weight_decay': 30.0, **optimizer_cfg}
-        if isinstance(scheduler_cfg, dict):
-            scheduler_cfg = {'gamma': 0.996, **scheduler_cfg}
-        super().__init__(input_size, channels, optimizer_cfg, scheduler_cfg)
+        if isinstance(optimizer, dict):
+            optimizer = {'lr': 0.03, 'weight_decay': 30.0, **optimizer}
+        if isinstance(scheduler, dict):
+            scheduler = {'gamma': 0.996, **scheduler}
+        super().__init__(input_size, channels, loss, optimizer, scheduler)
         
         self.conv = torch.nn.Conv1d(input_size, channels, 65, bias=True)
     
@@ -185,7 +204,7 @@ class LinearEncoder(BaseEncoder):
 
 
 class DeepEncoder(BaseEncoder):
-    def __init__(self, input_size, hidden_size=128, channels=1, optimizer_cfg={}, scheduler_cfg={}):
+    def __init__(self, input_size, hidden_size=128, channels=1, loss='mse', optimizer={}, scheduler={}):
         """
         A 1D-convolutional neural activity encoder for multiple electrodes which shares all hidden
         layers, except the final readout, between all electrodes.
@@ -195,11 +214,11 @@ class DeepEncoder(BaseEncoder):
             hidden_size: number of kernels in each layer of the network.
             channels: number of output channels, i.e., electrodes being encoded.
         """
-        if isinstance(optimizer_cfg, dict):
-            optimizer_cfg = {'lr': 0.003, 'weight_decay': 0.03, **optimizer_cfg}
-        if isinstance(scheduler_cfg, dict):
-            scheduler_cfg = {'gamma': 0.996, **scheduler_cfg}
-        super().__init__(input_size, channels, optimizer_cfg, scheduler_cfg)
+        if isinstance(optimizer, dict):
+            optimizer = {'lr': 0.003, 'weight_decay': 0.03, **optimizer}
+        if isinstance(scheduler, dict):
+            scheduler = {'gamma': 0.996, **scheduler}
+        super().__init__(input_size, channels, loss, optimizer, scheduler)
         self.hidden_size = hidden_size
         
         self.conv = torch.nn.Sequential(
@@ -236,7 +255,7 @@ class DeepEncoder(BaseEncoder):
         return receptive_field
 
 
-def fit(model, data, trainer=None, leave_out_idx=[], batch_size=64, num_workers=4, gpus=1, precision=16, verbose=0):
+def fit(model, data, trainer={}, leave_out_idx=[], batch_size=64, num_workers=4, verbose=0):
     """
     """
     # Initialize training dataloader
@@ -245,20 +264,20 @@ def fit(model, data, trainer=None, leave_out_idx=[], batch_size=64, num_workers=
         [y for i, y in enumerate(data[1]) if i not in leave_out_idx],
     ).iterator(batch_size=batch_size, num_workers=num_workers)
     
-    # Initialize trainer
-    if not trainer:
-        trainer = pl.Trainer(
-            gpus=gpus,
-            precision=precision,
-            gradient_clip_val=10.0,
-            max_epochs=1000,
-            logger=False,
-            detect_anomaly=True,
-            enable_model_summary=(verbose >= 2),
-            enable_progress_bar=(verbose >= 2),
-            enable_checkpointing=False,
-            callbacks=[]
-        )
+    # Initialize trainer if configuration dictionary
+    if isinstance(trainer, dict):
+        trainer = pl.Trainer(**{
+            'gpus': 1,
+            'precision': 16,
+            'gradient_clip_val': 10.0,
+            'max_epochs': 1000,
+            'logger': False,
+            'detect_anomaly': True,
+            'enable_model_summary': (verbose >= 2),
+            'enable_progress_bar': (verbose >= 2),
+            'enable_checkpointing': False,
+            **trainer
+        })
     
     # Fit model on train split
     trainer.fit(
@@ -269,11 +288,14 @@ def fit(model, data, trainer=None, leave_out_idx=[], batch_size=64, num_workers=
     return model
 
 
-def fit_multiple(builder, data, crossval=False, jackknife=False, trainer=None, save_dir=None, verbose=0, **kwargs):
+def fit_multiple(builder, data, crossval=False, jackknife=False, trainer={}, save_dir=None, verbose=0, **kwargs):
     """
     """
     if save_dir is None:
         raise ValueError('Parameter `save_dir` cannot be empty.')
+    if not isinstance(trainer, dict) and not callable(trainer):
+        raise ValueError('Parameter `trainer` either has to be a configuration dictionary'
+                         'or a function that returns a trainer object.')
     
     if verbose >= 1 and os.path.exists(save_dir):
         print(f'Directory "{save_dir}" already exists.', flush=True)
@@ -303,7 +325,7 @@ def fit_multiple(builder, data, crossval=False, jackknife=False, trainer=None, s
         fit(
             model=model,
             data=data,
-            trainer=trainer() if trainer else None,
+            trainer=trainer() if callable(trainer) else trainer,
             leave_out_idx=leave_out_idx,
             verbose=verbose,
             **kwargs
