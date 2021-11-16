@@ -5,10 +5,8 @@ __pycache__/
 ._*.py
 
 # Local files
-Data/
-lightning_logs/
-checkpoints/
-output/
+Examples/Data/
+Examples/output/
 
 # PyTorch checkpoint files
 *.ckpt

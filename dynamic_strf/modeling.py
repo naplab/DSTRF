@@ -101,11 +101,17 @@ class BaseEncoder(pl.LightningModule):
         super().__init__()
         self.input_size = input_size
         self.channels = channels
-        self.optimizer_cfg = optimizer_cfg
-        self.scheduler_cfg = scheduler_cfg
-        self._device = 'cpu'
-
+        
+        self.optimizer_cfg = {
+            'lr': 0.003, 'weight_decay': 0.03, **optimizer_cfg
+        } if isinstance(optimizer_cfg, dict) else optimizer_cfg
+        
+        self.scheduler_cfg = {
+            'gamma': 0.996, **scheduler_cfg
+        } if isinstance(scheduler_cfg, dict) else scheduler_cfg
+        
         self.loss = torch.nn.MSELoss(reduction='mean')
+        self._device = 'cpu'
     
     def to(self, device):
         super().to(device)
@@ -120,8 +126,13 @@ class BaseEncoder(pl.LightningModule):
         return self._device
     
     def configure_optimizers(self):
-        optimizer = radam.RAdam(self.parameters(), **{'lr': 0.003, 'weight_decay': 0.03, **self.optimizer_cfg})
-        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, **{'gamma': 0.996, **self.scheduler_cfg})
+        optimizer = radam.RAdam(
+            self.parameters(), **self.optimizer_cfg
+        ) if isinstance(self.optimizer_cfg, dict) else self.optimizer_cfg()
+        
+        scheduler = torch.optim.lr_scheduler.ExponentialLR(
+            optimizer, **self.scheduler_cfg
+        ) if isinstance(self.scheduler_cfg, dict) else self.scheduler_cfg()
         
         return {
             'optimizer': optimizer,
@@ -139,7 +150,7 @@ class BaseEncoder(pl.LightningModule):
 
 
 class LinearEncoder(BaseEncoder):
-    def __init__(self, input_size, channels=1, **kwargs):
+    def __init__(self, input_size, channels=1, optimizer_cfg={}, scheduler_cfg={}):
         """
         A 1D-convolutional neural activity encoder for multiple electrodes which shares all hidden
         layers, except the final readout, between all electrodes.
@@ -149,11 +160,13 @@ class LinearEncoder(BaseEncoder):
             hidden_size: number of kernels in each layer of the network.
             channels: number of output channels, i.e., electrodes being encoded.
         """
-        super().__init__(input_size, channels, **kwargs)
+        if isinstance(optimizer_cfg, dict):
+            optimizer_cfg = {'lr': 0.03, 'weight_decay': 30.0, **optimizer_cfg}
+        if isinstance(scheduler_cfg, dict):
+            scheduler_cfg = {'gamma': 0.996, **scheduler_cfg}
+        super().__init__(input_size, channels, optimizer_cfg, scheduler_cfg)
         
-        self.conv = torch.nn.Sequential(
-            torch.nn.Conv1d(input_size, channels, 65, bias=True)
-        )
+        self.conv = torch.nn.Conv1d(input_size, channels, 65, bias=True)
     
     def forward(self, x):
         x = x.to(self.device)
@@ -166,17 +179,13 @@ class LinearEncoder(BaseEncoder):
     @property
     def receptive_field(self):
         receptive_field = 1
-        for m in self.conv:
-            if isinstance(m, torch.nn.Conv1d):
-                receptive_field += (m.kernel_size[0] - 1) * m.dilation[0]
-            elif not isinstance(m, torch.nn.ReLU):
-                raise RuntimeError(f'Unsupported module {type(m)}')
+        receptive_field += (self.conv.kernel_size[0] - 1) * self.conv.dilation[0]
         
         return receptive_field
 
 
 class DeepEncoder(BaseEncoder):
-    def __init__(self, input_size, hidden_size=128, channels=1, **kwargs):
+    def __init__(self, input_size, hidden_size=128, channels=1, optimizer_cfg={}, scheduler_cfg={}):
         """
         A 1D-convolutional neural activity encoder for multiple electrodes which shares all hidden
         layers, except the final readout, between all electrodes.
@@ -186,7 +195,11 @@ class DeepEncoder(BaseEncoder):
             hidden_size: number of kernels in each layer of the network.
             channels: number of output channels, i.e., electrodes being encoded.
         """
-        super().__init__(input_size, channels, **kwargs)
+        if isinstance(optimizer_cfg, dict):
+            optimizer_cfg = {'lr': 0.003, 'weight_decay': 0.03, **optimizer_cfg}
+        if isinstance(scheduler_cfg, dict):
+            scheduler_cfg = {'gamma': 0.996, **scheduler_cfg}
+        super().__init__(input_size, channels, optimizer_cfg, scheduler_cfg)
         self.hidden_size = hidden_size
         
         self.conv = torch.nn.Sequential(
