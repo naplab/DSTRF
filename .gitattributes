@@ -1,0 +1,3 @@
+# Ignore Examples/ directory in language statistics
+Examples/ -linguist-detectable
+
