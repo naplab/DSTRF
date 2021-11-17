@@ -122,7 +122,7 @@ class BaseEncoder(pl.LightningModule):
                 'or a function that returns a PyTorch scheduler object.'
             )
         
-        if loss = 'mse':
+        if loss == 'mse':
             self._loss = torch.nn.MSELoss(reduction='mean')
         else:
             self._loss = loss

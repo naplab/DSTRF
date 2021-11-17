@@ -18,11 +18,14 @@ setuptools.setup(
     license='MIT',
     packages=['dynamic_strf'],
     install_requires=[
+        'ipypb',
         'numpy',
         'scipy',
         'torch',
         'torchaudio',
         'pytorch_lightning',
-        'radam'
+        'radam',
+        'ffmpeg-python',
+        'matplotlib'
     ],
 )

@@ -108,7 +108,7 @@ def dSTRF_jackknife(model, checkpoints, x, chunk_size=100, verbose=0):
 
 
 @torch.no_grad()
-def dSTRF_multiple(model, checkpoints, data, crossval=False, jackknife=False, save_dir=None, chunk_size=100, verbose=0):
+def dSTRF_multiple(model, checkpoints, data, crossval=False, save_dir=None, chunk_size=100, verbose=0):
     """
     Estimate dynamic spectrotemporal receptive field (dSTRF) of a model for given input `x`.
 
@@ -129,7 +129,7 @@ def dSTRF_multiple(model, checkpoints, data, crossval=False, jackknife=False, sa
         print(f'Directory "{save_dir}" already exists.', flush=True)
     os.makedirs(save_dir, exist_ok=True)
     
-    if os.path.isdir(checkpoints):
+    if isinstance(checkpoints, str) and os.path.isdir(checkpoints):
         checkpoints = sorted(glob.glob(os.path.join(checkpoints, 'model-*.pt')))
         if verbose >= 1:
             print(f'Found {len(checkpoints)} model checkpoints in specified directory.', flush=True)
@@ -146,7 +146,7 @@ def dSTRF_multiple(model, checkpoints, data, crossval=False, jackknife=False, sa
         
         if verbose >= 1:
             print(f'Computing dSTRFs for stimulus {i+1:02d}/{len(data):02d}', end='')
-            if jackknife:
+            if len(checkpoints_i) > 1:
                 print(f' (jackknife = {len(checkpoints_i)})... ', flush=True, end='')
             else:
                 print(f'... ', flush=True, end='')
@@ -329,7 +329,7 @@ def nonlinearities(paths, reduction='none', verbose=0):
         'shape change': []
     }
     
-    if os.path.isdir(paths):
+    if isinstance(paths, str) and os.path.isdir(paths):
         paths = sorted(glob.glob(os.path.join(paths, 'dSTRF-*.pt')))
         if verbose >= 1:
             print(f'Found {len(paths)} dSTRF files in specified directory.', flush=True)
@@ -355,3 +355,68 @@ def nonlinearities(paths, reduction='none', verbose=0):
             raise NotImplementedError()
     
     return nonlinearity
+
+
+@torch.no_grad()
+def STRF_jackknife(model, checkpoints):
+    """
+    Estimate spectrotemporal receptive field (dSTRF) of a model for given input `x`.
+
+    Arguments:
+        mode: a pytorch model being analyzed. It should accept input of shape [time * in_channels]
+            and return output of shape [time * out_channels].
+        x: input of shape [time * in_channels].
+        chunk_size: number of time samples to calculate dSTRF on simultaneously.
+        verbose: a boolean, indicating whether to print out progress status.
+    
+    Returns:
+        dstrfs: a dSTRF tensor of shape [time * out_channels * time_lag * in_channels].
+    """
+    # Load STRFs for all jackknives
+    strfs = []
+    for checkpoint in checkpoints:
+        # Load model checkpoint
+        model.eval().load_state_dict(torch.load(checkpoint))
+
+        # STRF has shape [channel * lag * frequency]
+        strfs.append(model.conv.weight.clone().transpose(1, 2))
+
+    # Average STRFs from all jackknives
+    return torch.mean(torch.stack(strfs, dim=0), dim=0).cpu()
+
+
+@torch.no_grad()
+def STRF_multiple(model, checkpoints, num_trials=1, crossval=False, verbose=0):
+    """
+    Estimate dynamic spectrotemporal receptive field (dSTRF) of a model for given input `x`.
+
+    Arguments:
+        mode: a pytorch model being analyzed. It should accept input of shape [time * in_channels]
+            and return output of shape [time * out_channels].
+        x: input of shape [time * in_channels].
+        chunk_size: number of time samples to calculate dSTRF on simultaneously.
+        verbose: a boolean, indicating whether to print out progress status.
+    
+    Returns:
+        dstrfs: a dSTRF tensor of shape [time * out_channels * time_lag * in_channels].
+    """
+    if isinstance(checkpoints, str) and os.path.isdir(checkpoints):
+        checkpoints = sorted(glob.glob(os.path.join(checkpoints, 'model-*.pt')))
+        if verbose >= 1:
+            print(f'Found {len(checkpoints)} model checkpoints in specified directory.', flush=True)
+    
+    strfs = []
+    for i in range(num_trials):
+        if crossval:
+            checkpoints_i = [ckpt for ckpt in checkpoints if i in utils.leave_out_from_checkpoint(ckpt)]
+        else:
+            checkpoints_i = checkpoints
+        
+        strfs.append(
+            STRF_jackknife(
+                model=model,
+                checkpoints=checkpoints_i
+            )
+        )
+    
+    return strfs
