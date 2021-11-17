@@ -1,17 +1,22 @@
 # DSTRF
+
 A toolbox for dynamic spectrotemporal receptive field (dSTRF) analysis, as introduced in <a href="https://elifesciences.org/articles/53445">"Estimating and interpreting nonlinear receptive field of sensory neural responses with deep neural network models"</a>. In short, dSTRF is a method to analyze which parts of the input at any time point are being used by a feed-forward deep neural network to predict the response.
+
+In mathematical terms, for a nonlinear model ***f(⋅)***, input at time ***t***, ***X<sub>t</sub>***, and output at time ***t***, ***Y<sub>t</sub> = f(X<sub>t</sub>)***, the dSTRF is the locally linear transformation ***W<sub>t</sub>***, such that: ***Y<sub>t</sub> = W<sub>t</sub> X<sub>t</sub>***. Now, if ***f(⋅)*** is a linear function, ***W<sub>t</sub>*** will be the same for all ***t***. If not, the linearized function applied to the input (***W<sub>t</sub>***) will depend on the given stimulus (***X<sub>t</sub>***), which is the case in a deep neural network.
+
+A linear function mapping the auditory stimuli in the spectrotemporal domain (i.e., auditory spectrograms) to the neural activity recorded from the biological brain is called a spectrotemporal receptive field (STRF). Since we use a nonlinear mapping between the stimulus and response, and characterize it as a locally linear function at each time point, we call this a dynamic spectrotemporal receptive field (dSTRF).
+
+Note that for the equality condition ***Y<sub>t</sub> = W<sub>t</sub> X<sub>t</sub>*** to hold for all ***t***, the intermediate layers should have no bias term, and ReLU or LeakyReLU activations. In this case, the ***Y<sub>t</sub> / X<sub>t</sub>*** is equivalent to the derivative of ***Y*** with respect to ***X***, at ***X<sub>t</sub>***, i.e., the Jacobian matrix of function ***f(⋅)***. If the above conditions are not satisfied, the Jacobian will only be approximating ***Y<sub>t</sub> / X<sub>t</sub>***.
 
 ## Usage
 
-There are two ways to use this toolbox:
+This toolbox has two main modules:
 
-1. Functional: This case entails using separate functions to train the model, estimate the dSTRFs from the model, and quantify the degree of nonlinearity of the estimated dSTRFs. All the main functions for the analysis are located in the <a href="https://github.com/naplab/DSTRF/blob/master/dynamic_strf/estimate.py">dynamic_strf.estimate</a> module.
+1. <a href="https://github.com/naplab/DSTRF/blob/master/dynamic_strf/modeling.py">**modeling**</a>: This module contains functions to fit and evaluate neural activity encoding models. The training supports cross-validation, and data jackknifing. It also contains two sample Encoder classes that map audio spectrogram to neural activity&mdash; a linear model, and a deep convolutional model.
 
-2. Unified: In this case, we use an all-in-one <a href="https://github.com/naplab/DSTRF/blob/master/dynamic_strf/analyzer.py">Analyzer</a> class that takes a model and data, and trains the model on the data, estimates the dSTRFs, and computes the dSTRF nonlinearities. This class enables the following robustness funcionalities:
+2. <a href="https://github.com/naplab/DSTRF/blob/master/dynamic_strf/estimate.py">**estimate**</a>: This module contains all functions necessary to compute dSTRFs and analyze their nonlinear characteristics. The dSTRF estimation supports cross-validation and data jackknifing to be used with cross-validated and jackknifed training introduced in the above module.
 
-    1. Cross-validation: If separate validation data is not provided, the analyzer works in a cross-validation regime, where dSTRFs for each data trial are computed from a model trained on all the other trials. This means if the data consists of N trials, there will be N models trained.
-
-    2. Data jackknifing: If jackknifing is enabled, the training set (after leaving out the validation if necessary), is jackknifed, leaving out one trial at a time and training the model on the remaining trials. This means if the data consists of N trials and jackknifing is enabled, (a) if separate validation data is provided, N models will be trained, (b) if cross-validating, N*(N-1)/2 models will be trained, i.e., leaving out two trials at a time (one as a validation trial, the other from the jackknifing procedure).
+All the main functionality of the toolbox, along with some examples is demonstrated in the <a href="https://nbviewer.org/github/naplab/DSTRF/blob/master/Examples/Example.ipynb">Example</a> notebook.
 
 ## Installation
 
@@ -23,5 +28,5 @@ You can use the same command to update the package.
 
 ## To-do
 
-- Add a jupyter notebook demonstrating the application of the toolbox on a toy example.
-- Make jackknifing also accessible in a functional format.
+- Improve README
+- Fix code documentation
