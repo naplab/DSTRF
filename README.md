@@ -20,11 +20,9 @@ All the main functionality of the toolbox, along with some examples is demonstra
 
 ## Installation
 
-To install this package through pip, run the following command:
+To install or update this package through pip, run the following command:
 
 `pip install git+https://github.com/naplab/DSTRF.git`
-
-You can use the same command to update the package.
 
 ## To-do
 
