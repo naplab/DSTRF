@@ -54,7 +54,7 @@ def dSTRF(model, x, chunk_size=100, verbose=0):
 
 
 @torch.no_grad()
-def dSTRF_jackknife(model, checkpoints, x, chunk_size=100, verbose=0):
+def dSTRF_jackknife(model, checkpoints, x, chunk_size=100, filter_q=0, verbose=0):
     """
     Estimate dynamic spectrotemporal receptive field (dSTRF) of a model for given input `x`.
 
@@ -68,6 +68,9 @@ def dSTRF_jackknife(model, checkpoints, x, chunk_size=100, verbose=0):
     Returns:
         dstrfs: a dSTRF tensor of shape [time * out_channels * time_lag * in_channels].
     """
+    if filter_q and filter_q <= 0.5 or filter_q > 1:
+        raise ValueError('Parameter `filter_q` should be either 0, or a quantile [ 0.5 < Q ≤ 1 ].')
+    
     # Pad input such that output has same shape and is half-precision
     context_size = model.receptive_field - 1
     x = torch.nn.functional.pad(x, (0, 0, context_size, 0)).half()
@@ -98,17 +101,28 @@ def dSTRF_jackknife(model, checkpoints, x, chunk_size=100, verbose=0):
             
             jacobians.append(jacobian)
         
-        # Average dSTRFs from all jackknives
-        dstrfs.append( # dSTRF is of shape [time * channel * lag * frequency]
-            torch.mean(torch.stack(jacobians, dim=0), dim=0)
-        )
+        # Stack dSTRFs from all jackknives: [N * time * channel * lag * frequency]
+        jacobians = torch.stack(jacobians, dim=0)
+        
+        # Average dSTRFs from all jackknives: [time * channel * lag * frequency]
+        jacobian = torch.mean(jacobians, dim=0)
+        
+        # Mask inconsistent time-frequency bins if filter quantile specified
+        if filter_q:
+            jacobian[
+                (jacobians.float().quantile(filter_q, dim=0) > 0)
+                &
+                (jacobians.float().quantile(1-filter_q, dim=0) < 0)
+            ] = 0
+        
+        dstrfs.append(jacobian)
         del jacobian, jacobians
     
     return torch.cat(dstrfs, dim=0) # shape [time * channel * lag * frequency]
 
 
 @torch.no_grad()
-def dSTRF_multiple(model, checkpoints, data, crossval=False, save_dir=None, chunk_size=100, verbose=0):
+def dSTRF_multiple(model, checkpoints, data, crossval=False, save_dir=None, chunk_size=100, filter_q=0, verbose=0):
     """
     Estimate dynamic spectrotemporal receptive field (dSTRF) of a model for given input `x`.
 
@@ -157,6 +171,7 @@ def dSTRF_multiple(model, checkpoints, data, crossval=False, save_dir=None, chun
                 checkpoints=checkpoints_i,
                 x=x,
                 chunk_size=chunk_size,
+                filter_q=filter_q,
                 verbose=verbose
             ),
             fpath
