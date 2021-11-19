@@ -21,11 +21,16 @@ def _tempfile(loc='/tmp'):
     return tempfile(loc) if os.path.exists(path) else path
 
 
-def dSTRF(path, channels=slice(None), time_range=slice(None), figsize=(4, 4), aspect=2.5, cmap='bwr', vquant=0.90, output_prefix='./', verbose=0):
+def dSTRF(path, channels=slice(None), time_range=slice(None), figsize=(4, 4), aspect=2, cmap='bwr', vquant=0.90, output_prefix='./', verbose=0, **kwargs):
     """
     """
     # Load dSTRF from file and filter channels and time samples
     dstrf = torch.load(path)[time_range, channels, :, :]
+    
+    # If prefix leads to different directory, create if doesn't exist
+    if '/' in output_prefix:
+        parent_dir = '/'.join(output_prefix.split('/')[:-1])
+        os.makedirs(parent_dir, exist_ok=True)
     
     # Loop over channels
     for c in (ipypb.irange if verbose >=1 else range)(dstrf.shape[1]):
@@ -50,6 +55,22 @@ def dSTRF(path, channels=slice(None), time_range=slice(None), figsize=(4, 4), as
                 vmax=vmax,
                 origin='lower'
             )
+            
+            if 'xlabel' in kwargs:
+                plt.xlabel(kwargs['xlabel'])
+            
+            if 'ylabel' in kwargs:
+                plt.ylabel(kwargs['ylabel'])
+            
+            if 'xticks' in kwargs and 'xtick_labels' in kwargs:
+                plt.xticks(kwargs['xticks'], kwargs['xtick_labels'])
+            elif 'xticks' in kwargs:
+                plt.xticks(kwargs['xticks'])
+            
+            if 'yticks' in kwargs and 'ytick_labels' in kwargs:
+                plt.yticks(kwargs['yticks'], kwargs['ytick_labels'], fontsize=11)
+            elif 'yticks' in kwargs:
+                plt.yticks(kwargs['yticks'])
             
             plt.savefig(os.path.join(tmp_dir, f'channel-{c:04d}-frame-{t:04d}.png'))
             plt.close()

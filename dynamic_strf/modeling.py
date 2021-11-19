@@ -313,7 +313,8 @@ def fit_multiple(builder, data, crossval=False, jackknife=False, trainer={}, sav
         
         if os.path.exists(fpath):
             # If trained model exists, skip
-            print('Skip.', flush=True)
+            if verbose >= 1:
+                print('Skip.', flush=True)
             continue
         elif verbose >= 2:
             print(flush=True)

@@ -182,7 +182,7 @@ def dSTRF_multiple(model, checkpoints, data, crossval=False, save_dir=None, chun
 
 
 @torch.no_grad()
-def complexity(dstrfs):
+def complexity(dstrfs, batch_size=8):
     """
     Measure general complexity of dSTRF function.
 
@@ -193,14 +193,24 @@ def complexity(dstrfs):
         complexity: nonlinear function complexity, tensor of shape [channel]
     """
     tdim, cdim, ldim, fdim = dstrfs.shape
+    if cdim > batch_size:
+        return torch.cat([
+            complexity(
+                dstrfs[:, k*batch_size:(k+1)*batch_size],
+                batch_size=batch_size
+            ) for k in range(math.ceil(cdim / batch_size))
+        ])
+    
     dstrfs = dstrfs.transpose(0, 1).reshape(cdim, tdim, ldim*fdim)
-    singular_vals = torch.linalg.svdvals(dstrfs.cpu())
-    complexity = (singular_vals / singular_vals.max(dim=1, keepdims=True)[0]).sum(dim=1)
-    return complexity
+    
+    sing_vals = torch.linalg.svdvals(dstrfs.float())
+    complexty = (sing_vals / sing_vals.max(dim=1, keepdims=True)[0]).sum(dim=1)
+    
+    return complexty.cpu()
 
 
 @torch.no_grad()
-def gain_change(dstrfs):
+def gain_change(dstrfs, batch_size=8):
     """
     Measure standard deviation of dSTRF gains.
     
@@ -210,11 +220,20 @@ def gain_change(dstrfs):
     Returns:
         gain_change: shape change parameter, tensor of shape [channel]
     """
+    tdim, cdim, ldim, fdim = dstrfs.shape
+    if cdim > batch_size:
+        return torch.cat([
+            gain_change(
+                dstrfs[:, k*batch_size:(k+1)*batch_size],
+                batch_size=batch_size
+            ) for k in range(math.ceil(cdim / batch_size))
+        ])
+    
     return dstrfs.norm(dim=[-2, -1]).std(dim=0).cpu()
 
 
 @torch.no_grad()
-def temporal_hold(dstrfs, lookahead=None, batch_size=1000):
+def temporal_hold(dstrfs, lookahead=None, batch_size=8):
     """
     Align dSTRFs to their adjacent neighbors by shifting to find how long an average dSTRF shifts along
     the time axis.
@@ -228,6 +247,15 @@ def temporal_hold(dstrfs, lookahead=None, batch_size=1000):
         temporal_hold: temporal shift parameter, tensor of shape [channel]
     """
     tdim, cdim, ldim, _ = dstrfs.shape
+    if cdim > batch_size:
+        return torch.cat([
+            temporal_hold(
+                dstrfs[:, k*batch_size:(k+1)*batch_size],
+                lookahead=lookahead,
+                batch_size=batch_size
+            ) for k in range(math.ceil(cdim / batch_size))
+        ])
+    
     lookahead = max(ldim-10, min(ldim, 5)) if lookahead is None else lookahead
     dstrfs = torch.nn.functional.pad(dstrfs, (0, 0, 0, lookahead))
 
@@ -262,7 +290,7 @@ def temporal_hold(dstrfs, lookahead=None, batch_size=1000):
 
 
 @torch.no_grad()
-def shape_change(dstrfs, niter=100, span=None, batch_size=1000, return_shifts=False):
+def shape_change(dstrfs, niter=100, span=None, batch_size=8, verbose=0): #return_shifts=False):
     """
     Align all dSTRFs to the global mean by shifting them along the lag axis.
     Compute shape change nonlinearity measure on the aligned dSTRFs.
@@ -280,6 +308,16 @@ def shape_change(dstrfs, niter=100, span=None, batch_size=1000, return_shifts=Fa
             returned if return_shifts is True
     """
     tdim, cdim, ldim, fdim = dstrfs.shape
+    if cdim > batch_size:
+        return torch.cat([
+            shape_change(
+                dstrfs[:, k*batch_size:(k+1)*batch_size],
+                niter=niter,
+                span=span,
+                batch_size=batch_size
+            ) for k in range(math.ceil(cdim / batch_size))
+        ])
+    
     span = max(ldim-10, min(ldim, 5)) if span is None else span
     dstrfs = torch.nn.functional.pad(dstrfs, (0, 0, span, span))
     
@@ -308,14 +346,15 @@ def shape_change(dstrfs, niter=100, span=None, batch_size=1000, return_shifts=Fa
         
         if (shift == 0).all():
             break
-        else:
+        elif verbose >= 1:
             print('Iteration #%d: %.4f average shift.' % (i+1, shift.float().mean().cpu()), flush=True)
     t2 = time.time()
     
-    if not (shift == 0).all():
-        print('Failed to converge to solution ({:s} elapsed).'.format(utils.timestr(t2-t1)))
-    else:
-        print('Converged in {:d} iterations ({:s} elapsed).'.format(i, utils.timestr(t2-t1)))
+    if verbose >= 1:
+        if not (shift == 0).all():
+            print('Failed to converge to solution ({:s} elapsed).'.format(utils.timestr(t2-t1)))
+        else:
+            print('Converged in {:d} iterations ({:s} elapsed).'.format(i, utils.timestr(t2-t1)))
     
     power = dstrfs.abs().mean(dim=[0, 3])
     best_shift = torch.arange(-span, span+1)[
@@ -329,14 +368,15 @@ def shape_change(dstrfs, niter=100, span=None, batch_size=1000, return_shifts=Fa
         shifts[:, c] += best_shift[c]
     dstrfs = dstrfs[:, :, span:-span]
     
-    if return_shifts:
-        return complexity(dstrfs), dstrfs.cpu(), shifts.cpu()
-    else:
-        return complexity(dstrfs)
+    #if return_shifts:
+    #    return complexity(dstrfs), dstrfs.cpu(), shifts.cpu()
+    #else:
+    #    return complexity(dstrfs)
+    return complexity(dstrfs)
 
 
 @torch.no_grad()
-def nonlinearities(paths, reduction='none', verbose=0):
+def nonlinearities(paths, reduction='none', batch_size=8, device='cpu', verbose=0):
     nonliniearity = {
         'complexity': [],
         'gain change': [],
@@ -353,11 +393,21 @@ def nonlinearities(paths, reduction='none', verbose=0):
         paths = ipypb.track(paths)
     
     for path in paths:
-        dstrf = torch.load(path).to(self.device)
-        nonliniearity['complexity'].append(estimate.complexity(dstrf))
-        nonliniearity['gain change'].append(estimate.gain_change(dstrf))
-        nonliniearity['temporal hold'].append(estimate.temporal_hold(dstrf))
-        nonliniearity['shape change'].append(estimate.shape_change(dstrf))
+        dstrf = torch.load(path).to(device)
+        
+        nonliniearity['complexity'].append(
+            complexity(dstrf, batch_size=batch_size)
+        )
+        nonliniearity['gain change'].append(
+            gain_change(dstrf, batch_size=batch_size)
+        )
+        nonliniearity['temporal hold'].append(
+            temporal_hold(dstrf, batch_size=batch_size)
+        )
+        nonliniearity['shape change'].append(
+            shape_change(dstrf, batch_size=batch_size, verbose=verbose)
+        )
+        
         del dstrf
     
     for k in nonliniearity:
