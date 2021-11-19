@@ -16,7 +16,7 @@ This toolbox has two main modules:
 
 2. <a href="https://github.com/naplab/DSTRF/blob/master/dynamic_strf/estimate.py">**estimate**</a>: This module contains all functions necessary to compute dSTRFs and analyze their nonlinear characteristics. The dSTRF estimation supports cross-validation and data jackknifing to be used with cross-validated and jackknifed training introduced in the above module.
 
-All the main functionality of the toolbox, along with some examples is demonstrated in the <a href="https://nbviewer.org/github/naplab/DSTRF/blob/master/Examples/Example.ipynb">Example</a> notebook.
+All the main functionality of the toolbox, along with some examples is demonstrated in the <a href="https://nbviewer.org/github/naplab/DSTRF/blob/master/Examples/Tutorial.ipynb">Example</a> notebook.
 
 ## Installation
 
@@ -26,5 +26,5 @@ To install or update this package through pip, run the following command:
 
 ## To-do
 
-- Improve README
+- Test for possible bugs
 - Fix code documentation
