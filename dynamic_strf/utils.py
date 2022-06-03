@@ -83,13 +83,44 @@ def first_nonzero(x, axis=0):
     return ((x != 0).cumsum(dim=axis) == 1).int().argmax(dim=axis)
 
 
+def _slice_baskets(items, maxbaskets):
+    '''
+    Slice a list into a certain number of groups and minimizes the variance
+    in group length. For example, a list of length 21 and maxbaskets=5 will
+    get grouped into 1 group of 5 and 4 groups of 4, rather than 4 groups of 5
+    and 1 group of 1.
+    '''
+    n_baskets = min(maxbaskets, len(items))
+    return [items[i::n_baskets] for i in range(n_baskets)]
+
 def leave_out_indices(num_trials, crossval=False, jackknife=False):
     if not crossval and not jackknife:
         instances = [[]]
     elif crossval and jackknife:
-        instances = [[i, j] for i in range(num_trials) for j in range(i+1, num_trials)]
+        if isinstance(jackknife, bool):
+            instances = [[i, j] for i in range(num_trials) for j in range(i+1, num_trials)]
+        elif isinstance(jackknife, int):
+            instances = []
+            for i in range(num_trials):
+                other_trials = [x for x in range(num_trials)]
+                for other_trial_subset in _slice_baskets(other_trials, jackknife):
+                    subset = set([i] + other_trial_subset)
+                    if subset not in instances:
+                        instances.append(subset)
+            instances = [list(x) for x in instances]
+        else:
+            raise TypeError(f'jackknife must be either a bool or an int specifying '
+                            f'the number of jackknife groups, but got a {type(jackknife)}')
     else:
-        instances = [[i] for i in range(num_trials)]
+        if isinstance(jackknife, bool):
+            instances = [[i] for i in range(num_trials)]
+        elif isinstance(jackknife, int):
+            lst = [i for i in range(num_trials)]
+            n = jackknife
+            instances = _slice_baskets(lst, n)
+        else:
+            raise TypeError(f'jackknife must be either a bool or an int specifying '
+                            f'the number of jackknife groups, but got a {type(jackknife)}')
     
     return instances
 
