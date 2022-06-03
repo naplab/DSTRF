@@ -24,7 +24,6 @@ setuptools.setup(
         'torch',
         'torchaudio',
         'pytorch_lightning',
-        'radam',
         'ffmpeg-python',
         'matplotlib'
     ],
