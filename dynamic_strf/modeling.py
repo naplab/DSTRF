@@ -7,7 +7,6 @@ from typing import Tuple
 
 import numpy as np
 import torch
-import radam
 import torchaudio
 import pytorch_lightning as pl
 
@@ -145,7 +144,7 @@ class BaseEncoder(pl.LightningModule):
         params = self.parameters()
         
         if isinstance(self._optimizer, dict):
-            optimizer = radam.RAdam(params, **self._optimizer)
+            optimizer = torch.optim.RAdam(params, **self._optimizer)
         else:
             optimizer = self._optimizer(params)
         
